@@ -66,7 +66,6 @@ GLboolean dirty_framebuffer = GL_FALSE; // Flag whether current in use framebuff
 GLboolean dirty_query = GL_FALSE; // Flag whether occlusion queries needs results
 static GLboolean needs_end_scene = GL_FALSE; // Flag for gxm end scene requirement at scene reset
 static GLboolean needs_scene_reset = GL_TRUE; // Flag for when a scene reset is required
-static GLboolean scene_not_flushed = GL_FALSE; // Flag for when a scene had been forcibly flushed as last operation
 
 SceGxmContext *gxm_context; // sceGxm context instance
 GLenum vgl_error = GL_NO_ERROR; // Error returned by glGetError
@@ -252,6 +251,7 @@ static void shader_patcher_host_free_cb(void *user_data, void *mem) {
 }
 
 // sceDisplay callback
+static volatile int display_error; // Last sceDisplaySetFrameBuf failure, logged off the display thread
 static void display_queue_callback(const void *callbackData) {
 	// Populating sceDisplay framebuffer parameters
 	SceDisplayFrameBuf display_fb;
@@ -273,7 +273,10 @@ static void display_queue_callback(const void *callbackData) {
 		vgl_display_cb(cb_data->addr);
 
 	// Setting sceDisplay framebuffer
-	sceDisplaySetFrameBuf(&display_fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
+	/* Runs on SceGxmDisplayQueue (4 KiB stack): record the error, log it in vglSwapBuffers. */
+	int result = sceDisplaySetFrameBuf(&display_fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
+	if (result < 0)
+		display_error = result;
 
 	// Performing VSync if enabled
 	if (vsync_interval)
@@ -537,6 +540,38 @@ static void init_depth_stencil_buffer(uint32_t w, uint32_t h, SceGxmDepthStencil
 #endif
 }
 
+/* KH1: depth belongs to a GS buffer, not to one framebuffer's color target. */
+static struct { SceGxmDepthStencilSurface surface; uint32_t w, h; } kh1_depth[3];
+GLboolean vgl_is_shared_depth(const SceGxmDepthStencilSurface *surface) {
+    for (int i = 0; i < 3; i++) if (surface == &kh1_depth[i].surface) return GL_TRUE;
+    return GL_FALSE;
+}
+GLboolean vglBindSharedDepthBuffer(GLuint handle, GLuint group, GLsizei w, GLsizei h) {
+    if (!handle || group >= 3 || w <= 0 || h <= 0) return GL_FALSE;
+    framebuffer *fb = (framebuffer *)handle;
+    if (fb->width > w || fb->height > h) return GL_FALSE;
+    if (kh1_depth[group].w < w || kh1_depth[group].h < h) {
+        SceGxmDepthStencilSurface replacement;
+        glFinish();
+        w = MAX(w, kh1_depth[group].w); h = MAX(h, kh1_depth[group].h);
+        init_depth_stencil_buffer(w, h, &replacement, GL_TRUE, SCE_GXM_MULTISAMPLE_NONE);
+        if (!replacement.depthData || !replacement.stencilData) return GL_FALSE;
+        if (kh1_depth[group].w) {
+            mark_as_dirty(kh1_depth[group].surface.depthData);
+            mark_as_dirty(kh1_depth[group].surface.stencilData);
+        }
+        kh1_depth[group].surface = replacement;
+        kh1_depth[group].w = w; kh1_depth[group].h = h;
+    }
+    if (fb->depthbuffer_ptr && !vgl_is_shared_depth(fb->depthbuffer_ptr)) {
+        glFinish(); mark_depth_stencil_as_dirty(fb->depthbuffer_ptr);
+    }
+    fb->depthbuffer_ptr = &kh1_depth[group].surface;
+    fb->depthbuffer_state = DEPTHBUFFER_READY;
+    dirty_framebuffer = GL_TRUE;
+    return GL_TRUE;
+}
+
 void init_display_depth_stencil_surfaces(void) {
 	init_depth_stencil_buffer(DISPLAY_WIDTH, DISPLAY_HEIGHT, &gxm_depth_stencil_surface, GL_TRUE, msaa_mode);
 }
@@ -592,7 +627,6 @@ static inline __attribute__((always_inline)) void scene_end(void) {
 
 void scene_reset(void) {
 	if (in_use_framebuffer != active_write_fb || needs_scene_reset || dirty_framebuffer || dirty_query) {
-		scene_not_flushed = GL_TRUE;
 		dirty_framebuffer = GL_FALSE;
 		dirty_query = GL_FALSE;
 		needs_scene_reset = GL_FALSE;
@@ -781,6 +815,12 @@ void vglSetDisplayBufferCount(int count) {
 
 void vglSwapBuffers(GLboolean has_commondialog) {
 	THREAD_SAFE()
+
+	int failed_display = display_error;
+	if (failed_display < 0) {
+		display_error = 0;
+		vgl_log("sceDisplaySetFrameBuf failed: 0x%08X\n", failed_display);
+	}
 
 #ifndef SKIP_SPLASHSCREEN
 	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
@@ -1007,13 +1047,9 @@ void vglSwapBuffers(GLboolean has_commondialog) {
 void glFinish(void) {
 	THREAD_SAFE()
 
-	// Waiting for GPU to finish drawing jobs
-	if (scene_not_flushed) {
-		dirty_framebuffer = GL_TRUE;
-		scene_reset();
-		sceGxmFinish(gxm_context);
-		scene_not_flushed = GL_FALSE;
-	}
+	glFlush();
+	/* Wait even when the scene was submitted by a previous glFlush(). */
+	sceGxmFinish(gxm_context);
 }
 
 void glReleaseShaderCompiler(void) {
@@ -1028,10 +1064,10 @@ void glReleaseShaderCompiler(void) {
 void glFlush(void) {
 	THREAD_SAFE()
 	
-	if (scene_not_flushed) {
-		dirty_framebuffer = GL_TRUE;
-		scene_reset();
-		scene_not_flushed = GL_FALSE;
+	if (needs_end_scene) {
+		scene_end();
+		needs_end_scene = GL_FALSE;
+		needs_scene_reset = GL_TRUE;
 	}
 }
 

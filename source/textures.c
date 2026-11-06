@@ -2840,3 +2840,19 @@ SceGxmTexture *vglGetGxmTexture(GLenum target) {
 		SET_GL_ERROR_WITH_RET(GL_INVALID_ENUM, NULL)
 	}
 }
+
+/* Borrow a GPU-mapped palette owned by the caller; no ownership transfer. */
+void vglTexturePalettePointer(GLenum target, const void *palette) {
+    texture_unit *tex_unit = &texture_units[server_texture_unit];
+    int texture2d_idx;
+    resolve_tex_target(target, SET_GL_ERROR(GL_INVALID_ENUM));
+    vglSetTexPalette(&texture_slots[texture2d_idx].gxm_tex, (void *)palette);
+}
+GLsizei vglGetTextureStride(GLenum target) {
+    texture_unit *tex_unit = &texture_units[server_texture_unit];
+    int texture2d_idx;
+    resolve_tex_target(target, SET_GL_ERROR_WITH_RET(GL_INVALID_ENUM, 0));
+    texture *tex = &texture_slots[texture2d_idx];
+    uint32_t w, h; vglGetTexSizes(&tex->gxm_tex, &w, &h);
+    return VGL_ALIGN(w, 8) * tex_format_to_bytespp(vglGetTexFormat(&tex->gxm_tex));
+}

@@ -18,6 +18,29 @@
 
 #include "vitaGL.h"
 #include "shared.h"
+#include <stdarg.h>
+#include <stdio.h>
+
+static void (*vgl_log_callback)(const char *message);
+
+void vglSetLogCallback(void (*callback)(const char *message)) {
+	vgl_log_callback = callback;
+}
+
+#ifdef LOG_ERRORS
+void vgl_log(const char *format, ...) {
+	char message[512];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(message, sizeof(message), format, args);
+	va_end(args);
+	if (vgl_log_callback)
+		vgl_log_callback(message);
+	else
+		sceClibPrintf("%s", message);
+}
+#endif
+
 #ifdef HAVE_RAZOR
 extern razor_results razor_metrics;
 #endif

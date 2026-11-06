@@ -511,7 +511,7 @@ static char *shark_log = NULL;
 #ifdef STRICT_UNIFORMS_COMPLIANCE
 static inline __attribute__((always_inline)) uniform *get_uniform_from_ptr(GLint ptr, uint32_t *offset) {
 	uniform_location u;
-	u.raw = ptr;
+	u.raw = ptr - 1;
 	uniform *ret = u.is_vertex ? &progs[u.program_idx].vert_uniforms[u.uniform_idx] : &progs[u.program_idx].frag_uniforms[u.uniform_idx];
 	*offset = u.offset;
 	return ret;
@@ -2798,7 +2798,8 @@ GLint glGetUniformLocation(GLuint prog, const GLchar *name) {
 			ret.zero = 0;
 			ret.program_idx = prog - 1;
 			ret.uniform_idx = i;
-			return ret.raw;
+			/* Uniform setters reserve zero for an invalid location. */
+			return ret.raw + 1;
 #else
 			return -((GLint)&j[i]);
 #endif

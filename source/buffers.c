@@ -964,3 +964,23 @@ void vglSetVertexAttribPoolSize(uint32_t main_size, uint32_t aux_size) {
 	main_vertex_attrib_pool_size = main_size;
 	aux_vertex_attrib_pool_size = aux_size;
 }
+
+/* Stable mapped storage for engines that manage their own GPU fences. */
+void *vglGetBufferDataPointer(GLenum target) {
+    vbo *b = target == GL_ARRAY_BUFFER ? (vbo *)vertex_array_unit : target == GL_ELEMENT_ARRAY_BUFFER ? (vbo *)cur_vao->index_array_unit : NULL;
+    return b ? b->ptr : NULL;
+}
+
+/* KH1: per-scene GPU fences. Every scene end writes query_fence.value into the
+ * notification word once its fragments are stored, so a caller can wait for one
+ * scene instead of glFinish draining every scene in flight. */
+GLuint vglGetSceneFence(void) {
+	return query_fence.value;
+}
+GLboolean vglSceneFenceDone(GLuint fence) {
+	return (int32_t)(*query_fence.address - fence) >= 0 ? GL_TRUE : GL_FALSE;
+}
+void vglWaitSceneFence(GLuint fence) {
+	while ((int32_t)(*query_fence.address - fence) < 0)
+		sceKernelDelayThread(50);
+}
