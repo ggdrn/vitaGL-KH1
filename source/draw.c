@@ -158,6 +158,13 @@ static inline __attribute__((always_inline)) void convert_16_to_8bit_indices(uin
 	}
 }
 
+static inline void submit_draw(SceGxmPrimitiveType primitive, SceGxmIndexFormat format,
+                               const void *indices, GLsizei count) {
+	int result = sceGxmDraw(gxm_context, primitive, format, indices, count);
+	if (result < 0)
+		vgl_log("sceGxmDraw failed: 0x%08X (format %d, %d indices)\n", result, format, count);
+}
+
 void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 	THREAD_SAFE()
 
@@ -217,7 +224,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 			vgl_log("%s:%d Attempting to draw a model with glDrawArrays which is too big! Consider increasing MAX_IDX_NUMBER value... (Max requested index: %d)\n", __FILE__, __LINE__, count - 1);
 		}
 #endif
-		sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+		submit_draw(gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
 	}
 	restore_polygon_mode(gxm_p);
 }
@@ -381,13 +388,13 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *gl_in
 	{
 		if (type == GL_UNSIGNED_SHORT) {
 			setup_elements_indices(uint16_t);
-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+			submit_draw(gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
 		} else if (type == GL_UNSIGNED_INT) {
 			setup_elements_indices(uint32_t);
-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
+			submit_draw(gxm_p, SCE_GXM_INDEX_FORMAT_U32, ptr, count);
 		} else {
 			setup_8bit_elements_indices();
-			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
+			submit_draw(gxm_p, SCE_GXM_INDEX_FORMAT_U16, ptr, count);
 		}
 	}
 	restore_polygon_mode(gxm_p);

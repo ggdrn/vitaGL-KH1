@@ -31,7 +31,7 @@ extern "C" {
 // Debugging tool
 char *get_gxm_error_literal(uint32_t code);
 #ifdef LOG_ERRORS
-#define vgl_log sceClibPrintf
+void vgl_log(const char *format, ...);
 #else
 #define vgl_log(...)
 #endif

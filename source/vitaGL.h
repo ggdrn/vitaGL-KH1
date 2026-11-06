@@ -1232,6 +1232,14 @@ size_t vglMemFree(vglMemType type);
 size_t vglMemTotal(vglMemType type);
 
 // Setups a GL texture with custom internal values.
+/* KH1 local extensions: shared depth, borrowed CLUT and mapped texture row stride. */
+GLboolean vglBindSharedDepthBuffer(GLuint framebuffer, GLuint group, GLsizei width, GLsizei height);
+void vglTexturePalettePointer(GLenum target, const void *palette);
+GLsizei vglGetTextureStride(GLenum target);
+void *vglGetBufferDataPointer(GLenum target);
+GLuint vglGetSceneFence(void);
+GLboolean vglSceneFenceDone(GLuint fence);
+void vglWaitSceneFence(GLuint fence);
 void vglSetupTexture(GLenum target, void *data, SceGxmTextureFormat format, SceGxmTextureType type, GLsizei width, GLsizei height, GLsizei mip_count);
 
 // Replaces original texture data pointer with a new one in a GL texture.
@@ -1262,6 +1270,7 @@ void vglSetCustomSplashscreenHashColor(float r, float g, float b, float a);
 void vglSetDisplayBufferCount(int count);
 
 // Setup a callback executed everytime a new frame is sent to the display. Useful to setup a CPU rendered overlay on-screen.
+void vglSetLogCallback(void (*callback)(const char *message));
 void vglSetDisplayCallback(void (*cb)(void *framebuf));
 
 // Setup the fragment ring buffer size of sceGxm. Must be called before vglInit*. Default value: SCE_GXM_DEFAULT_FRAGMENT_RING_BUFFER_SIZE.

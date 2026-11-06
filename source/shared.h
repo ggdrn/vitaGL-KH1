@@ -585,7 +585,9 @@ enum {
 };
 
 #ifndef DEPTH_STENCIL_HACK
+GLboolean vgl_is_shared_depth(const SceGxmDepthStencilSurface *surface);
 static inline __attribute__((always_inline)) void mark_depth_stencil_as_dirty(SceGxmDepthStencilSurface *surface) {
+	if (vgl_is_shared_depth(surface)) return;
 	mark_as_dirty(surface->depthData);
 	if (surface->stencilData) {
 		mark_as_dirty(surface->stencilData);
