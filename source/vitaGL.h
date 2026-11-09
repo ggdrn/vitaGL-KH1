@@ -1235,6 +1235,7 @@ size_t vglMemTotal(vglMemType type);
 /* KH1 local extensions: shared depth, borrowed CLUT and mapped texture row stride. */
 GLboolean vglBindSharedDepthBuffer(GLuint framebuffer, GLuint group, GLsizei width, GLsizei height);
 void vglTexturePalettePointer(GLenum target, const void *palette);
+GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: an indexed draw from one interleaved VBO with the first vertex vertex_base bytes in and the indices index_offset bytes into the bound element buffer
 GLsizei vglGetTextureStride(GLenum target);
 void *vglGetBufferDataPointer(GLenum target);
 GLuint vglGetSceneFence(void);
