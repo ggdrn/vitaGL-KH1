@@ -1696,6 +1696,99 @@ GLboolean _glDrawElements_CustomShadersIMPL(uint16_t *idx_buf, GLsizei count, ui
 	return GL_TRUE;
 }
 
+/*
+ * KH1 port: an indexed triangle draw with the bound custom program whose enabled attributes all come from one VBO in one
+ * interleaved vertex (the same stride; offsets inside the vertex, as glVertexAttribPointer set them with base 0). The
+ * draw's first vertex is vertex_base bytes into that VBO and its indices index_offset bytes into the bound element
+ * buffer, so a caller that draws many runs from one arena sets the attributes once and moves only these two. One stream
+ * (one sceGxmSetVertexStream), the patched vertex program looked up by its layout (the cache's MRU while the layout
+ * holds), the fragment program, textures and uniforms as glDrawElements sets them. GL_FALSE (nothing drawn) when the
+ * state is not that shape: the caller then draws through glDrawElements.
+ */
+GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
+	if (cur_program == 0 || count <= 0 || mode != GL_TRIANGLES || (type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT))
+		return GL_FALSE;
+	program *p = &progs[cur_program - 1];
+	vbo *ibuf = (vbo *)cur_vao->index_array_unit;
+	if (!ibuf || p->attr_num < 1 || p->attr_num > VERTEX_ATTRIBS_NUM)
+		return GL_FALSE;
+	vbo *vb = (vbo *)cur_vao->vertex_attrib_vbo[p->attr_map[0]];
+	if (!vb)
+		return GL_FALSE;
+	SceGxmVertexAttribute attrs[VERTEX_ATTRIBS_NUM];
+	SceGxmVertexStream stream;
+	stream.stride = cur_vao->vertex_stream_config[p->attr_map[0]].stride;
+	stream.indexSource = type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_SOURCE_INDEX_32BIT : SCE_GXM_INDEX_SOURCE_INDEX_16BIT;
+	for (int i = 0; i < p->attr_num; i++) {
+		uint8_t a = p->attr_map[i];
+		if (!(cur_vao->vertex_attrib_state & (1 << a)) || (vbo *)cur_vao->vertex_attrib_vbo[a] != vb ||
+			cur_vao->vertex_stream_config[a].stride != stream.stride || cur_vao->vertex_attrib_offsets[a] >= stream.stride)
+			return GL_FALSE;
+		attrs[i] = cur_vao->vertex_attrib_config[a];
+		attrs[i].streamIndex = 0;
+		attrs[i].offset = cur_vao->vertex_attrib_offsets[a];
+		attrs[i].regIndex = p->attr[a].regIndex;
+	}
+
+	scene_reset();
+	setup_frag_program();
+
+	// Fragment and vertex textures, as _glDrawElements_CustomShadersIMPL sets them
+	for (int i = 0; i < p->max_frag_texunit_idx; i++) {
+		if (p->frag_texunits[i]) {
+			texture_unit *tex_unit = &texture_units[(int)p->frag_texunits[i]->sampler_index];
+			uint8_t tex_type = p->frag_texunits[i]->type == UNIFORM_CUBE_SAMPLER ? 2 : tex2d_override;
+			texture *tex = &texture_slots[tex_unit->tex_id[tex_type]];
+#ifdef HAVE_TEX_CACHE
+			restore_tex_cache(tex);
+#endif
+			tex->last_frame = vgl_framecount;
+			sampler *smp = samplers[(int)p->frag_texunits[i]->sampler_index];
+			if (smp) {
+				vglSetTexMinFilter(&tex->gxm_tex, smp->min_filter);
+				vglSetTexMipFilter(&tex->gxm_tex, smp->mip_filter);
+				vglSetTexMagFilter(&tex->gxm_tex, smp->mag_filter);
+				vglSetTexUMode(&tex->gxm_tex, smp->u_mode);
+				vglSetTexVMode(&tex->gxm_tex, smp->v_mode);
+				vglSetTexMipmapCount(&tex->gxm_tex, smp->use_mips ? tex->mip_count : 0);
+				vglSetTexLodBias(&tex->gxm_tex, smp->lod_bias);
+				tex->overridden = GL_TRUE;
+			} else if (tex->overridden) {
+				vglSetTexMinFilter(&tex->gxm_tex, tex->min_filter);
+				vglSetTexMipFilter(&tex->gxm_tex, tex->mip_filter);
+				vglSetTexMagFilter(&tex->gxm_tex, tex->mag_filter);
+				vglSetTexUMode(&tex->gxm_tex, tex->u_mode);
+				vglSetTexVMode(&tex->gxm_tex, tex->v_mode);
+				vglSetTexMipmapCount(&tex->gxm_tex, tex->use_mips ? tex->mip_count : 0);
+				vglSetTexLodBias(&tex->gxm_tex, tex->lod_bias);
+				tex->overridden = GL_FALSE;
+			}
+			sceGxmSetFragmentTexture(gxm_context, i, &tex->gxm_tex);
+		}
+	}
+	for (int i = 0; i < p->max_vert_texunit_idx; i++) {
+		if (p->vert_texunits[i]) {
+			texture_unit *tex_unit = &texture_units[(int)p->vert_texunits[i]->sampler_index];
+			uint8_t tex_type = p->vert_texunits[i]->type == UNIFORM_CUBE_SAMPLER ? 2 : tex2d_override;
+			texture *tex = &texture_slots[tex_unit->tex_id[tex_type]];
+			tex->last_frame = vgl_framecount;
+			sceGxmSetVertexTexture(gxm_context, i, &tex->gxm_tex);
+		}
+	}
+
+	patch_vertex_program(p->vshader->id, attrs, p->attr_num, &stream, 1, &p->vprog);
+	sceGxmSetVertexProgram(gxm_context, p->vprog);
+	upload_uniforms();
+	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
+	vb->last_frame = vgl_framecount;
+	ibuf->last_frame = vgl_framecount;
+	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
+		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
+	if (r < 0)
+		vgl_log("vglDrawElementsPackedKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
+	return GL_TRUE;
+}
+
 #ifdef ENABLE_LEGACY_PIPELINE
 void _vglDrawObjects_CustomShadersIMPL() {
 #ifdef HAVE_PROFILING
