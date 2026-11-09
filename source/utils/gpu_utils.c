@@ -971,7 +971,7 @@ void gpu_alloc_planar_texture(uint32_t w, uint32_t h, SceGxmTextureFormat format
 	if (texture_data != NULL) {
 		// Initializing texture data buffer
 		if (data != NULL) {
-			if (plane_w == w && half_plane_w == half_w) // Texture size is already aligned, we can use a single vgl_fast_memcpy for better performance
+			if (plane_w == w && plane_h == h && half_plane_w == half_w && half_plane_h == half_h) // Texture size is already aligned, we can use a single vgl_fast_memcpy for better performance
 				vgl_fast_memcpy(texture_data, data, tex_size);
 			else if ((format & 0x9F000000) == SCE_GXM_TEXTURE_BASE_FORMAT_YUV420P3) {
 				uint8_t *src_y = (uint8_t *)data;
