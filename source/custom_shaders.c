@@ -138,11 +138,11 @@ char vgl_file_cache_path[256];
 
 #ifndef HAVE_FFP_SHADER_SUPPORT
 #define upload_uniforms() \
-	if (p->vert_uniforms && dirty_shader_vert_unifs) { \
-		void *buffer = vglReserveVertexUniformBuffer(p->vshader->unif_buf_size); \
-		vgl_fast_memcpy(buffer, p->unif_vbuffer, p->vshader->unif_buf_size); \
+	if (p->vert_uniforms && (dirty_shader_vert_unifs || kh1_vrow_stale())) { \
+		kh1_vert_upload(p); \
 		dirty_shader_vert_unifs = GL_FALSE; \
 	} \
+	kh1_vrow_hi = 0; \
 	if (p->frag_uniforms && dirty_shader_frag_unifs) { \
 		void *buffer = vglReserveFragmentUniformBuffer(p->fshader->unif_buf_size); \
 		vgl_fast_memcpy(buffer, p->unif_fbuffer, p->fshader->unif_buf_size); \
@@ -167,8 +167,7 @@ char vgl_file_cache_path[256];
 	}
 #else
 #define upload_uniforms() \
-	if (p->vert_uniforms && (dirty_vert_unifs || dirty_shader_vert_unifs)) { \
-		void *buffer = vglReserveVertexUniformBuffer(p->vshader->unif_buf_size); \
+	if (p->vert_uniforms && (dirty_vert_unifs || dirty_shader_vert_unifs || kh1_vrow_stale())) { \
 		if (dirty_vert_unifs) { \
 			dirty_vert_unifs = GL_FALSE; \
 			if (p->ffp_binds[FFP_MVP_MATRIX]) { \
@@ -191,9 +190,10 @@ char vgl_file_cache_path[256];
 				vglSetUniformData(p->ffp_binds[FFP_NORMAL_MATRIX]->vptr, SCE_GXM_PARAMETER_TYPE_F32, 0, 3, 3, (const float *)normal_matrix, SCE_GXM_PARAMETER_TYPE_F32); \
 			} \
 		} \
-		vgl_fast_memcpy(buffer, p->unif_vbuffer, p->vshader->unif_buf_size); \
+		kh1_vert_upload(p); \
 		dirty_shader_vert_unifs = GL_FALSE; \
 	} \
+	kh1_vrow_hi = 0; \
 	if (p->frag_uniforms && dirty_shader_frag_unifs) { \
 		void *buffer = vglReserveFragmentUniformBuffer(p->fshader->unif_buf_size); \
 		vgl_fast_memcpy(buffer, p->unif_fbuffer, p->fshader->unif_buf_size); \
@@ -507,6 +507,40 @@ static program progs[MAX_CUSTOM_PROGRAMS];
 #ifdef HAVE_SHARK_LOG
 static char *shark_log = NULL;
 #endif
+
+/*
+ * KH1 port (vglVertexUniformRowsKH1): the rows of the vertex default uniform buffer the next draw reads. A draw that
+ * names them copies only those rows into its reserved buffer (the rest of it is never read by that draw), not the
+ * whole buffer (the port's native programs: u_m[128], 2 KiB, of which a draw reads a few matrices). The buffer stays
+ * bound for the draws after it that set no uniform, so it is copied again when one of them reads rows outside the
+ * ones it holds, or names none.
+ */
+static uint32_t kh1_vrow_lo, kh1_vrow_hi; // the next draw's rows in bytes; hi 0: not named (the whole buffer)
+static void *kh1_vrow_buf; // the default vertex uniform buffer a named upload filled in part (NULL: none bound)
+static uint32_t kh1_vrow_vlo, kh1_vrow_vhi; // the rows it holds
+uint32_t vgl_kh1_vrow_copies, vgl_kh1_vrow_bytes; // uploads in part and their bytes, for the port's log
+
+static inline __attribute__((always_inline)) int kh1_vrow_stale(void) {
+	if (!kh1_vrow_buf || vgl_def_vert_buf != kh1_vrow_buf)
+		return 0;
+	return !kh1_vrow_hi || kh1_vrow_lo < kh1_vrow_vlo || kh1_vrow_hi > kh1_vrow_vhi;
+}
+
+static inline __attribute__((always_inline)) void kh1_vert_upload(program *p) {
+	const uint32_t size = p->vshader->unif_buf_size;
+	uint8_t *buffer = (uint8_t *)vglReserveVertexUniformBuffer(size);
+	if (kh1_vrow_hi && kh1_vrow_hi <= size) {
+		vgl_fast_memcpy(buffer + kh1_vrow_lo, (uint8_t *)p->unif_vbuffer + kh1_vrow_lo, kh1_vrow_hi - kh1_vrow_lo);
+		kh1_vrow_buf = buffer;
+		kh1_vrow_vlo = kh1_vrow_lo;
+		kh1_vrow_vhi = kh1_vrow_hi;
+		vgl_kh1_vrow_copies++;
+		vgl_kh1_vrow_bytes += kh1_vrow_hi - kh1_vrow_lo;
+	} else {
+		vgl_fast_memcpy(buffer, p->unif_vbuffer, size);
+		kh1_vrow_buf = NULL;
+	}
+}
 
 #ifdef STRICT_UNIFORMS_COMPLIANCE
 static inline __attribute__((always_inline)) uniform *get_uniform_from_ptr(GLint ptr, uint32_t *offset) {
@@ -1694,6 +1728,32 @@ GLboolean _glDrawElements_CustomShadersIMPL(uint16_t *idx_buf, GLsizei count, ui
 	shaders_draw_cnt++;
 #endif
 	return GL_TRUE;
+}
+
+/*
+ * KH1 port: the next draw with the bound program reads only rows float4 rows of the vertex default uniform buffer,
+ * from the vertex uniform at location (an F32 four-component uniform or an element of an array of them, as
+ * glGetUniformLocation gave it) on. Its upload, when it makes one, copies those rows only (kh1_vert_upload). It applies
+ * to that one draw; rows 0, or a location that is not such a vertex uniform of the bound program, names nothing (the
+ * whole buffer, as before).
+ */
+void vglVertexUniformRowsKH1(GLint location, GLsizei rows) {
+	kh1_vrow_hi = 0;
+	if (location == -1 || location == 0 || rows <= 0 || cur_program == 0)
+		return;
+	program *p = &progs[cur_program - 1];
+	uint32_t offs = 0;
+	uniform *u = (uniform *)get_uniform_from_ptr(location, &offs);
+	if (!u || !u->vptr || !p->unif_vbuffer || sceGxmProgramParameterGetType(u->ptr) != SCE_GXM_PARAMETER_TYPE_F32 ||
+		sceGxmProgramParameterGetComponentCount(u->ptr) != 4)
+		return;
+	const uint32_t size = p->vshader->unif_buf_size;
+	const uint8_t *at = (const uint8_t *)u->vptr + 16 * offs;
+	if (at < (const uint8_t *)p->unif_vbuffer || at >= (const uint8_t *)p->unif_vbuffer + size)
+		return;
+	uint32_t lo = at - (const uint8_t *)p->unif_vbuffer, hi = lo + 16 * (uint32_t)rows;
+	kh1_vrow_lo = lo;
+	kh1_vrow_hi = hi > size ? size : hi;
 }
 
 /*
