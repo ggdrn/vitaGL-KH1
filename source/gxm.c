@@ -541,7 +541,34 @@ static void init_depth_stencil_buffer(uint32_t w, uint32_t h, SceGxmDepthStencil
 }
 
 /* KH1: depth belongs to a GS buffer, not to one framebuffer's color target. */
-static struct { SceGxmDepthStencilSurface surface; uint32_t w, h; } kh1_depth[3];
+static struct { SceGxmDepthStencilSurface surface; uint32_t w, h; uint8_t set, load, store, fresh; } kh1_depth[3];
+/*
+ * KH1 port (vglSharedDepthLoadStoreKH1): whether the next scene that uses shared depth group `group` loads the group's
+ * depth and stencil at its start and stores them at its end.  STORE_DEPTH_STENCIL forces both for every scene; a pass
+ * that tests nothing an earlier scene wrote needs no load, one whose depth no later scene reads needs no store, and
+ * each is a pass of the GPU over the surface's tiles.  The request is for one scene: a scene ended by glFlush and
+ * begun again on the same framebuffer without a new request (the caller's scene continued) always loads, so the caller
+ * must ask for the store whenever its scene may be continued.  A group never asked about keeps the forced load and
+ * store.
+ */
+void vglSharedDepthLoadStoreKH1(GLuint group, GLboolean load, GLboolean store) {
+    if (group >= 3) return;
+    kh1_depth[group].set = 1;
+    kh1_depth[group].load = load ? 1 : 0;
+    kh1_depth[group].store = store ? 1 : 0;
+    kh1_depth[group].fresh = 1;
+}
+/* scene_reset, before sceGxmBeginScene: the modes asked for, on the surface the scene is about to use */
+static inline void kh1_depth_modes(SceGxmDepthStencilSurface *surface) {
+    for (int i = 0; i < 3; i++) {
+        if (surface != &kh1_depth[i].surface || !kh1_depth[i].set) continue;
+        sceGxmDepthStencilSurfaceSetForceLoadMode(surface, kh1_depth[i].load || !kh1_depth[i].fresh
+            ? SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_LOAD_DISABLED);
+        sceGxmDepthStencilSurfaceSetForceStoreMode(surface, kh1_depth[i].store
+            ? SCE_GXM_DEPTH_STENCIL_FORCE_STORE_ENABLED : SCE_GXM_DEPTH_STENCIL_FORCE_STORE_DISABLED);
+        kh1_depth[i].fresh = 0;
+    }
+}
 GLboolean vgl_is_shared_depth(const SceGxmDepthStencilSurface *surface) {
     for (int i = 0; i < 3; i++) if (surface == &kh1_depth[i].surface) return GL_TRUE;
     return GL_FALSE;
@@ -719,6 +746,7 @@ void scene_reset(void) {
 				}
 			}
 #endif
+			kh1_depth_modes(active_write_fb->depthbuffer_ptr);
 #ifdef HAVE_SHARED_RENDERTARGETS
 			render_target *fbo_rt = (render_target *)active_write_fb->target;
 #ifdef RECYCLE_RENDERTARGETS
