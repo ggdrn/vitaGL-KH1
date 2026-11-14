@@ -1765,6 +1765,15 @@ void vglVertexUniformRowsKH1(GLint location, GLsizei rows) {
  * holds), the fragment program, textures and uniforms as glDrawElements sets them. GL_FALSE (nothing drawn) when the
  * state is not that shape: the caller then draws through glDrawElements.
  */
+/*
+ * KH1 port (drawsplit=1, a diagnostic): one packed draw in about 8 (a hash of a call counter, not a fixed phase) timed
+ * by its phases: [0] the scene and fragment program, [1] the textures, [2] the vertex program (patch lookup and set),
+ * [3] the uniforms, [4] the stream and sceGxmDraw. Microseconds summed; vgl_kh1_split_n the sampled draws.
+ */
+int vgl_kh1_split;
+uint32_t vgl_kh1_split_n, vgl_kh1_split_us[5];
+static uint32_t kh1_split_ctr;
+#define KH1_SPLIT(i) do { if (smp) { uint32_t _t = sceKernelGetProcessTimeLow(); vgl_kh1_split_us[i] += _t - st; st = _t; } } while (0)
 GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
 	if (cur_program == 0 || count <= 0 || mode != GL_TRIANGLES || (type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT))
 		return GL_FALSE;
@@ -1790,8 +1799,13 @@ GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLui
 		attrs[i].regIndex = p->attr[a].regIndex;
 	}
 
+	int smp = vgl_kh1_split && ((++kh1_split_ctr * 2654435761u) >> 29) == 0;
+	uint32_t st = smp ? sceKernelGetProcessTimeLow() : 0;
+	if (smp)
+		vgl_kh1_split_n++;
 	scene_reset();
 	setup_frag_program();
+	KH1_SPLIT(0);
 
 	// Fragment and vertex textures, as _glDrawElements_CustomShadersIMPL sets them
 	for (int i = 0; i < p->max_frag_texunit_idx; i++) {
@@ -1836,14 +1850,18 @@ GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLui
 		}
 	}
 
+	KH1_SPLIT(1);
 	patch_vertex_program(p->vshader->id, attrs, p->attr_num, &stream, 1, &p->vprog);
 	sceGxmSetVertexProgram(gxm_context, p->vprog);
+	KH1_SPLIT(2);
 	upload_uniforms();
+	KH1_SPLIT(3);
 	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
 	vb->last_frame = vgl_framecount;
 	ibuf->last_frame = vgl_framecount;
 	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
 		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
+	KH1_SPLIT(4);
 	if (r < 0)
 		vgl_log("vglDrawElementsPackedKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
 	return GL_TRUE;
