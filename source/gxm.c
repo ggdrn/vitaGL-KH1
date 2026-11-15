@@ -66,6 +66,8 @@ GLboolean dirty_framebuffer = GL_FALSE; // Flag whether current in use framebuff
 GLboolean dirty_query = GL_FALSE; // Flag whether occlusion queries needs results
 static GLboolean needs_end_scene = GL_FALSE; // Flag for gxm end scene requirement at scene reset
 static GLboolean needs_scene_reset = GL_TRUE; // Flag for when a scene reset is required
+/* KH1 port (drawrep, vglDrawElementsPackedSameKH1): whether the next draw would reset the scene */
+GLboolean vgl_kh1_scene_pending(void) { return needs_scene_reset || in_use_framebuffer != active_write_fb || dirty_framebuffer || dirty_query; }
 
 SceGxmContext *gxm_context; // sceGxm context instance
 GLenum vgl_error = GL_NO_ERROR; // Error returned by glGetError

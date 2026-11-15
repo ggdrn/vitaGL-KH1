@@ -1774,39 +1774,9 @@ int vgl_kh1_split;
 uint32_t vgl_kh1_split_n, vgl_kh1_split_us[5];
 static uint32_t kh1_split_ctr;
 #define KH1_SPLIT(i) do { if (smp) { uint32_t _t = sceKernelGetProcessTimeLow(); vgl_kh1_split_us[i] += _t - st; st = _t; } } while (0)
-GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
-	if (cur_program == 0 || count <= 0 || mode != GL_TRIANGLES || (type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT))
-		return GL_FALSE;
-	program *p = &progs[cur_program - 1];
-	vbo *ibuf = (vbo *)cur_vao->index_array_unit;
-	if (!ibuf || p->attr_num < 1 || p->attr_num > VERTEX_ATTRIBS_NUM)
-		return GL_FALSE;
-	vbo *vb = (vbo *)cur_vao->vertex_attrib_vbo[p->attr_map[0]];
-	if (!vb)
-		return GL_FALSE;
-	SceGxmVertexAttribute attrs[VERTEX_ATTRIBS_NUM];
-	SceGxmVertexStream stream;
-	stream.stride = cur_vao->vertex_stream_config[p->attr_map[0]].stride;
-	stream.indexSource = type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_SOURCE_INDEX_32BIT : SCE_GXM_INDEX_SOURCE_INDEX_16BIT;
-	for (int i = 0; i < p->attr_num; i++) {
-		uint8_t a = p->attr_map[i];
-		if (!(cur_vao->vertex_attrib_state & (1 << a)) || (vbo *)cur_vao->vertex_attrib_vbo[a] != vb ||
-			cur_vao->vertex_stream_config[a].stride != stream.stride || cur_vao->vertex_attrib_offsets[a] >= stream.stride)
-			return GL_FALSE;
-		attrs[i] = cur_vao->vertex_attrib_config[a];
-		attrs[i].streamIndex = 0;
-		attrs[i].offset = cur_vao->vertex_attrib_offsets[a];
-		attrs[i].regIndex = p->attr[a].regIndex;
-	}
-
-	int smp = vgl_kh1_split && ((++kh1_split_ctr * 2654435761u) >> 29) == 0;
-	uint32_t st = smp ? sceKernelGetProcessTimeLow() : 0;
-	if (smp)
-		vgl_kh1_split_n++;
-	scene_reset();
-	setup_frag_program();
-	KH1_SPLIT(0);
-
+/* (KH1 port) the program's fragment and vertex textures bound as vglDrawElementsPackedKH1 binds them (shared with
+ * vglDrawElementsPackedTexKH1) */
+static inline __attribute__((always_inline)) void kh1_bind_textures(program *p) {
 	// Fragment and vertex textures, as _glDrawElements_CustomShadersIMPL sets them
 	for (int i = 0; i < p->max_frag_texunit_idx; i++) {
 		if (p->frag_texunits[i]) {
@@ -1850,6 +1820,51 @@ GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLui
 		}
 	}
 
+}
+/* (KH1 port, vglDrawElementsPackedSameKH1) the last packed draw's bindings */
+GLboolean vgl_kh1_scene_pending(void);
+static GLuint kh1_same_prog;
+static void *kh1_same_vb, *kh1_same_ibuf;
+static SceGxmFragmentProgram *kh1_same_fprog;
+static SceGxmVertexProgram *kh1_same_vprog;
+static uint32_t kh1_same_stride;
+static GLenum kh1_same_type;
+static int kh1_same_ok;
+uint32_t vgl_kh1_same_n;
+GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
+	if (cur_program == 0 || count <= 0 || mode != GL_TRIANGLES || (type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT))
+		return GL_FALSE;
+	program *p = &progs[cur_program - 1];
+	vbo *ibuf = (vbo *)cur_vao->index_array_unit;
+	if (!ibuf || p->attr_num < 1 || p->attr_num > VERTEX_ATTRIBS_NUM)
+		return GL_FALSE;
+	vbo *vb = (vbo *)cur_vao->vertex_attrib_vbo[p->attr_map[0]];
+	if (!vb)
+		return GL_FALSE;
+	SceGxmVertexAttribute attrs[VERTEX_ATTRIBS_NUM];
+	SceGxmVertexStream stream;
+	stream.stride = cur_vao->vertex_stream_config[p->attr_map[0]].stride;
+	stream.indexSource = type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_SOURCE_INDEX_32BIT : SCE_GXM_INDEX_SOURCE_INDEX_16BIT;
+	for (int i = 0; i < p->attr_num; i++) {
+		uint8_t a = p->attr_map[i];
+		if (!(cur_vao->vertex_attrib_state & (1 << a)) || (vbo *)cur_vao->vertex_attrib_vbo[a] != vb ||
+			cur_vao->vertex_stream_config[a].stride != stream.stride || cur_vao->vertex_attrib_offsets[a] >= stream.stride)
+			return GL_FALSE;
+		attrs[i] = cur_vao->vertex_attrib_config[a];
+		attrs[i].streamIndex = 0;
+		attrs[i].offset = cur_vao->vertex_attrib_offsets[a];
+		attrs[i].regIndex = p->attr[a].regIndex;
+	}
+
+	int smp = vgl_kh1_split && ((++kh1_split_ctr * 2654435761u) >> 29) == 0;
+	uint32_t st = smp ? sceKernelGetProcessTimeLow() : 0;
+	if (smp)
+		vgl_kh1_split_n++;
+	scene_reset();
+	setup_frag_program();
+	KH1_SPLIT(0);
+
+	kh1_bind_textures(p);
 	KH1_SPLIT(1);
 	patch_vertex_program(p->vshader->id, attrs, p->attr_num, &stream, 1, &p->vprog);
 	sceGxmSetVertexProgram(gxm_context, p->vprog);
@@ -1864,6 +1879,77 @@ GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLui
 	KH1_SPLIT(4);
 	if (r < 0)
 		vgl_log("vglDrawElementsPackedKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
+	/* (vglDrawElementsPackedSameKH1: what this draw left bound) */
+	kh1_same_prog = cur_program;
+	kh1_same_vb = vb;
+	kh1_same_ibuf = ibuf;
+	kh1_same_stride = stream.stride;
+	kh1_same_type = type;
+	kh1_same_fprog = p->fprog;
+	kh1_same_vprog = p->vprog;
+	kh1_same_ok = r >= 0;
+	return GL_TRUE;
+}
+
+/*
+ * KH1 port (drawrep=1, docs/vita-gpu-draw-submission.md, the precomputed draws' first step): a draw whose program,
+ * textures, uniforms, blending and framebuffer are all the packed draw before's (the port checks its own state; this
+ * checks vitaGL's: nothing dirty, the same program, vertex buffer, index buffer and stride, no scene to reset) needs
+ * only its vertex stream and its indices: GXM keeps the rest bound (vitaGL itself reserves no uniform buffer for a draw
+ * whose uniforms are clean).  GL_FALSE, nothing done, when any of it moved: the caller draws by the full path.
+ */
+GLboolean vglDrawElementsPackedSameKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
+	if (!kh1_same_ok || cur_program != kh1_same_prog || count <= 0 || mode != GL_TRIANGLES || type != kh1_same_type)
+		return GL_FALSE;
+	program *p = &progs[cur_program - 1];
+	vbo *ibuf = (vbo *)cur_vao->index_array_unit;
+	if (ibuf != kh1_same_ibuf || p->attr_num < 1 || p->fprog != kh1_same_fprog || p->vprog != kh1_same_vprog)
+		return GL_FALSE;
+	vbo *vb = (vbo *)cur_vao->vertex_attrib_vbo[p->attr_map[0]];
+	if (vb != kh1_same_vb || cur_vao->vertex_stream_config[p->attr_map[0]].stride != kh1_same_stride)
+		return GL_FALSE;
+	if (dirty_shader_vert_unifs || dirty_shader_frag_unifs || vgl_kh1_scene_pending() ||
+		p->blend_info.raw != blend_info.raw || is_fbo_float != p->is_fbo_float)
+		return GL_FALSE;
+	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
+	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
+		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
+	if (r < 0) {
+		vgl_log("vglDrawElementsPackedSameKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
+		kh1_same_ok = 0;
+	}
+	vgl_kh1_same_n++;
+	return GL_TRUE;
+}
+
+/*
+ * KH1 port (drawrep=2, the precomputed draws' step 2): as vglDrawElementsPackedSameKH1, but the texture the unit names
+ * now is bound again (only the textures: the programs, uniforms, blending and stream layout are the packed draw
+ * before's), then the stream and the draw.  GL_FALSE, nothing done, when any of vitaGL's other state moved.
+ */
+uint32_t vgl_kh1_tex_n;
+GLboolean vglDrawElementsPackedTexKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base) {
+	if (!kh1_same_ok || cur_program != kh1_same_prog || count <= 0 || mode != GL_TRIANGLES || type != kh1_same_type)
+		return GL_FALSE;
+	program *p = &progs[cur_program - 1];
+	vbo *ibuf = (vbo *)cur_vao->index_array_unit;
+	if (ibuf != kh1_same_ibuf || p->attr_num < 1 || p->fprog != kh1_same_fprog || p->vprog != kh1_same_vprog)
+		return GL_FALSE;
+	vbo *vb = (vbo *)cur_vao->vertex_attrib_vbo[p->attr_map[0]];
+	if (vb != kh1_same_vb || cur_vao->vertex_stream_config[p->attr_map[0]].stride != kh1_same_stride)
+		return GL_FALSE;
+	if (dirty_shader_vert_unifs || dirty_shader_frag_unifs || vgl_kh1_scene_pending() ||
+		p->blend_info.raw != blend_info.raw || is_fbo_float != p->is_fbo_float)
+		return GL_FALSE;
+	kh1_bind_textures(p);
+	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
+	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
+		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
+	if (r < 0) {
+		vgl_log("vglDrawElementsPackedTexKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
+		kh1_same_ok = 0;
+	}
+	vgl_kh1_tex_n++;
 	return GL_TRUE;
 }
 

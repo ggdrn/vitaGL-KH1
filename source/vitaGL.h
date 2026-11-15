@@ -1238,6 +1238,8 @@ GLboolean vglBindSharedDepthBuffer(GLuint framebuffer, GLuint group, GLsizei wid
 void vglSharedDepthLoadStoreKH1(GLuint group, GLboolean load, GLboolean store); // KH1 port: whether the next scene on shared depth group `group` loads / stores depth and stencil (a scene continued after glFlush always loads)
 void vglTexturePalettePointer(GLenum target, const void *palette);
 GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: an indexed draw from one interleaved VBO with the first vertex vertex_base bytes in and the indices index_offset bytes into the bound element buffer
+GLboolean vglDrawElementsPackedSameKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: the packed draw before's state kept, only this draw's vertex stream and indices (GL_FALSE when any of vitaGL's state moved)
+GLboolean vglDrawElementsPackedTexKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: as vglDrawElementsPackedSameKH1, the texture units bound again (GL_FALSE when anything else moved)
 void vglVertexUniformRowsKH1(GLint location, GLsizei rows); // KH1 port: the next draw reads only rows float4 rows of the vertex default uniform buffer from location on (its upload copies only those)
 GLsizei vglGetTextureStride(GLenum target);
 void *vglGetBufferDataPointer(GLenum target);
