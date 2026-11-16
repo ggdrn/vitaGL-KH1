@@ -1262,6 +1262,7 @@ void vglSetCustomSplashscreenHashColor(float r, float g, float b, float a);
 void vglSetDisplayBufferCount(int count);
 
 // Setup a callback executed everytime a new frame is sent to the display. Useful to setup a CPU rendered overlay on-screen.
+// The callback runs on the SceGxmDisplayQueue thread, which has a 4 KiB stack: avoid logging, printf and large stack buffers in it.
 void vglSetDisplayCallback(void (*cb)(void *framebuf));
 
 // Setup the fragment ring buffer size of sceGxm. Must be called before vglInit*. Default value: SCE_GXM_DEFAULT_FRAGMENT_RING_BUFFER_SIZE.

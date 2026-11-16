@@ -252,6 +252,10 @@ static void shader_patcher_host_free_cb(void *user_data, void *mem) {
 }
 
 // sceDisplay callback
+// It runs on the SceGxmDisplayQueue thread, whose stack is only 4 KiB: no logging (vsnprintf) or large stack buffers here.
+#ifdef LOG_ERRORS
+static volatile int display_error = 0; // Last sceDisplaySetFrameBuf failure, logged by vglSwapBuffers on the caller thread
+#endif
 static void display_queue_callback(const void *callbackData) {
 	// Populating sceDisplay framebuffer parameters
 	SceDisplayFrameBuf display_fb;
@@ -273,7 +277,13 @@ static void display_queue_callback(const void *callbackData) {
 		vgl_display_cb(cb_data->addr);
 
 	// Setting sceDisplay framebuffer
+#ifdef LOG_ERRORS
+	int r = sceDisplaySetFrameBuf(&display_fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
+	if (r < 0)
+		display_error = r;
+#else
 	sceDisplaySetFrameBuf(&display_fb, SCE_DISPLAY_SETBUF_NEXTFRAME);
+#endif
 
 	// Performing VSync if enabled
 	if (vsync_interval)
@@ -808,6 +818,15 @@ void vglSetDisplayBufferCount(int count) {
 
 void vglSwapBuffers(GLboolean has_commondialog) {
 	THREAD_SAFE()
+
+#ifdef LOG_ERRORS
+	// Reporting a display queue failure here since the display queue callback cannot log
+	int display_res = display_error;
+	if (display_res < 0) {
+		display_error = 0;
+		vgl_log("%s:%d %s: sceDisplaySetFrameBuf failed (0x%08X).\n", __FILE__, __LINE__, __func__, display_res);
+	}
+#endif
 
 #ifndef SKIP_SPLASHSCREEN
 	// Ignore display swaps during splashscreen since we handle them in the splashscreen thread
