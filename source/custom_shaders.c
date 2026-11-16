@@ -1821,6 +1821,10 @@ static inline __attribute__((always_inline)) void kh1_bind_textures(program *p) 
 	}
 
 }
+/* (KH1 port, drawsplit=1) the short paths' sampled split: [0] vglDrawElementsPackedTexKH1's textures bound again, [1]
+ * its stream and sceGxmDraw, [2] vglDrawElementsPackedSameKH1's stream and draw; the samples of the Tex and Same ones */
+uint32_t vgl_kh1_rep_us[3], vgl_kh1_rep_n, vgl_kh1_rep_same_n;
+static uint32_t kh1_rep_ctr;
 /* (KH1 port, vglDrawElementsPackedSameKH1) the last packed draw's bindings */
 GLboolean vgl_kh1_scene_pending(void);
 static GLuint kh1_same_prog;
@@ -1911,12 +1915,17 @@ GLboolean vglDrawElementsPackedSameKH1(GLenum mode, GLsizei count, GLenum type, 
 	if (dirty_shader_vert_unifs || dirty_shader_frag_unifs || vgl_kh1_scene_pending() ||
 		p->blend_info.raw != blend_info.raw || is_fbo_float != p->is_fbo_float)
 		return GL_FALSE;
+	uint32_t ks = vgl_kh1_split && ((++kh1_rep_ctr * 2654435761u) >> 29) == 0, k1 = ks ? sceKernelGetProcessTimeLow() : 0;
 	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
 	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
 		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
 	if (r < 0) {
 		vgl_log("vglDrawElementsPackedSameKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
 		kh1_same_ok = 0;
+	}
+	if (ks) {
+		vgl_kh1_rep_us[2] += sceKernelGetProcessTimeLow() - k1;
+		vgl_kh1_rep_same_n++;
 	}
 	vgl_kh1_same_n++;
 	return GL_TRUE;
@@ -1941,13 +1950,20 @@ GLboolean vglDrawElementsPackedTexKH1(GLenum mode, GLsizei count, GLenum type, G
 	if (dirty_shader_vert_unifs || dirty_shader_frag_unifs || vgl_kh1_scene_pending() ||
 		p->blend_info.raw != blend_info.raw || is_fbo_float != p->is_fbo_float)
 		return GL_FALSE;
+	uint32_t ks = vgl_kh1_split && ((++kh1_rep_ctr * 2654435761u) >> 29) == 0, k1 = ks ? sceKernelGetProcessTimeLow() : 0, k2;
 	kh1_bind_textures(p);
+	k2 = ks ? sceKernelGetProcessTimeLow() : 0;
 	sceGxmSetVertexStream(gxm_context, 0, (uint8_t *)vb->ptr + vertex_base);
 	int r = sceGxmDraw(gxm_context, SCE_GXM_PRIMITIVE_TRIANGLES,
 		type == GL_UNSIGNED_INT ? SCE_GXM_INDEX_FORMAT_U32 : SCE_GXM_INDEX_FORMAT_U16, (uint8_t *)ibuf->ptr + index_offset, count);
 	if (r < 0) {
 		vgl_log("vglDrawElementsPackedTexKH1: sceGxmDraw failed: 0x%08X (%d indices)\n", r, count);
 		kh1_same_ok = 0;
+	}
+	if (ks) { /* (KH1 port, drawsplit=1: the textures' rebind and the stream + draw, sampled) */
+		vgl_kh1_rep_us[0] += k2 - k1;
+		vgl_kh1_rep_us[1] += sceKernelGetProcessTimeLow() - k2;
+		vgl_kh1_rep_n++;
 	}
 	vgl_kh1_tex_n++;
 	return GL_TRUE;
