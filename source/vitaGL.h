@@ -1189,6 +1189,9 @@ uint32_t vglGetFrameNumber();
 // Get a GL function name given a function address.
 char *vglGetFuncName(uint32_t func);
 
+// Get the fence of the most recently submitted sceGxm scene (scenes are submitted by vglSwapBuffers, glFlush, glFinish and framebuffer changes). Call glFlush first to include the draws of the open scene.
+GLuint vglGetSceneFence(void);
+
 // Get the internal sceGxm texture descriptor of a GL texture.
 SceGxmTexture *vglGetGxmTexture(GLenum target);
 
@@ -1260,6 +1263,9 @@ void vglSetCustomSplashscreenHashColor(float r, float g, float b, float a);
 
 // Sets the number of buffers to use for the display swapchain. Default value: 3.
 void vglSetDisplayBufferCount(int count);
+
+// Check without blocking whether the GPU finished the scene a fence from vglGetSceneFence belongs to (and every scene before it).
+GLboolean vglSceneFenceDone(GLuint fence);
 
 // Setup a callback executed everytime a new frame is sent to the display. Useful to setup a CPU rendered overlay on-screen.
 void vglSetDisplayCallback(void (*cb)(void *framebuf));
@@ -1338,6 +1344,9 @@ void vglUseVramForUSSE(GLboolean usage);
 
 // Allows vitaGL to use newlib memory once all internal mempools are exhausted. Default value: GL_TRUE.
 void vglUseExtraMem(GLboolean usage);
+
+// Wait until the GPU finished the scene a fence from vglGetSceneFence belongs to. Unlike glFinish, scenes submitted after it are not waited for.
+void vglWaitSceneFence(GLuint fence);
 
 // Simplified function to enable or disable V-Sync. For more fine granularity on the swap interval use eglSwapInterval.
 void vglWaitVblankStart(GLboolean enable);

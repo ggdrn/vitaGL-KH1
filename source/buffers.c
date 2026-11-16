@@ -975,3 +975,22 @@ void vglSetVertexAttribPoolSize(uint32_t main_size, uint32_t aux_size) {
 	main_vertex_attrib_pool_size = main_size;
 	aux_vertex_attrib_pool_size = aux_size;
 }
+
+/*
+ * Scene fences: every scene end (scene_end) increments query_fence.value and has sceGxm write it into the
+ * notification region once the scene's fragments are done, so a caller can wait for one scene instead of glFinish
+ * draining every scene in flight. Comparisons are done on the signed difference so the counter can wrap around.
+ */
+GLuint vglGetSceneFence(void) {
+	return query_fence.value;
+}
+
+GLboolean vglSceneFenceDone(GLuint fence) {
+	return (int32_t)(*query_fence.address - fence) >= 0 ? GL_TRUE : GL_FALSE;
+}
+
+void vglWaitSceneFence(GLuint fence) {
+	while ((int32_t)(*query_fence.address - fence) < 0) {
+		sceKernelDelayThread(50);
+	}
+}
