@@ -29,7 +29,12 @@
 #define XXH_memset sceClibMemset
 #include "xxhash_utils.h"
 
-#define UNIFORM_CIRCULAR_POOL_SIZE (2 * 1024 * 1024)
+#ifndef UNIFORM_CIRCULAR_POOL_SIZE
+/* KH1 port: 4 MiB, was 2. The ring is not fenced: what a frame reserves must fit with the frames still in flight.
+ * The port's native vertex programs read u_m[256] (4 KiB) since natdraw.h's KH1_NAT_MATS went to 64, and every
+ * draw that uploads reserves the whole default buffer */
+#define UNIFORM_CIRCULAR_POOL_SIZE (4 * 1024 * 1024)
+#endif
 
 void *vgl_def_frag_buf = NULL;
 void *vgl_def_vert_buf = NULL;
