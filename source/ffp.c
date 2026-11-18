@@ -841,10 +841,12 @@ uint8_t reload_ffp_shaders(SceGxmVertexAttribute *attrs, SceGxmVertexStream *str
 			char vshader[8192];
 			sprintf(vshader, ffp_vert_src, mask.clip_planes_num, mask.num_textures, mask.has_colors, mask.lights_num, mask.lighting, mask.shading_mode, mask.normalize, mask.fixed_mask, mask.pos_fixed_mask, WVP_ON_GPU, mask.fast_perspective_correction);
 			uint32_t size = strlen(vshader);
+			vgl_shark_lock();
 			SceGxmProgram *t = shark_compile_shader_extended(vshader, &size, SHARK_VERTEX_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
 			ffp_vertex_program = (SceGxmProgram *)vglMalloc(size);
 			vgl_fast_memcpy((void *)ffp_vertex_program, (void *)t, size);
 			shark_clear_output();
+			vgl_shark_unlock();
 				
 			// Saving compiled shader in filesystem cache
 			f = sceIoOpen(fname, SCE_O_WRONLY | SCE_O_TRUNC | SCE_O_CREAT, 0777);
@@ -1129,10 +1131,12 @@ uint8_t reload_ffp_shaders(SceGxmVertexAttribute *attrs, SceGxmVertexStream *str
 				mask.lights_num, mask.lighting, mask.shading_mode, mask.point_sprite, mask.fast_perspective_correction, mask.srgb_mode);
 #endif
 			uint32_t size = strlen(fshader);
+			vgl_shark_lock();
 			SceGxmProgram *t = shark_compile_shader_extended(fshader, &size, SHARK_FRAGMENT_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
 			ffp_fragment_program = (SceGxmProgram *)vglMalloc(size);
 			vgl_fast_memcpy((void *)ffp_fragment_program, (void *)t, size);
 			shark_clear_output();
+			vgl_shark_unlock();
 
 			// Saving compiled shader in filesystem cache
 			f = sceIoOpen(fname, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
