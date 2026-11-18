@@ -2373,9 +2373,11 @@ void glCompileShader(GLuint handle) {
  * thread: the compiler is shared under vgl_shark_lock, the heap has its own locks.  The file is written under a
  * temporary name and renamed, so a glCompileShader on another thread never reads half of it.
  * type: GL_VERTEX_SHADER / GL_FRAGMENT_SHADER or their GL_CG_*_EXT forms (Cg source only; GLSL is not translated).
+ * With binary set, *binary also gets the shader in the cache file's layout (vglMalloc'd, *binary_len bytes; the caller
+ * vglFree's it), for glShaderBinary on the GL thread: no file read there.
  * Returns 1 when the cache has the shader (it had it, or the compile wrote it), 0 when the compile or the write failed,
  * -1 when this build has no shader cache or no compiler. */
-int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length) {
+int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length, void **binary, GLsizei *binary_len) {
 #ifdef HAVE_SHADER_CACHE
 	shader s;
 	char fname[256], tname[260];
@@ -2390,9 +2392,29 @@ int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length) {
 	uint64_t hash = XXH3_64bits(source, s.size);
 	uint8_t subdir_hash = hash >> 56;
 	int fname_len = sprintf(fname, "%s/%s/%02X/%016llX.gxp", vgl_shader_cache_path, s.type == GL_VERTEX_SHADER ? "v" : "f", subdir_hash, hash);
+	if (binary) {
+		*binary = NULL;
+		*binary_len = 0;
+	}
 	SceIoStat st;
-	if (sceIoGetstat(fname, &st) >= 0)
+	if (sceIoGetstat(fname, &st) >= 0) {
+		if (!binary)
+			return 1;
+		SceUID f = sceIoOpen(fname, SCE_O_RDONLY, 0777);
+		if (f >= 0) {
+			size_t sz = sceIoLseek(f, 0, SCE_SEEK_END);
+			sceIoLseek(f, 0, SCE_SEEK_SET);
+			void *buf = vglMalloc(sz);
+			if (buf && sceIoRead(f, buf, sz) == (int)sz) {
+				*binary = buf;
+				*binary_len = sz;
+			} else if (buf) {
+				vgl_free(buf);
+			}
+			sceIoClose(f);
+		}
 		return 1;
+	}
 
 	uint32_t size = s.size;
 	vgl_shark_lock();
@@ -2447,7 +2469,12 @@ int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length) {
 			else
 				sceIoRemove(tname);
 		}
-		vgl_free(buf);
+		if (binary) {
+			*binary = buf; // (handed over even when the write failed: the shader itself compiled)
+			*binary_len = sz;
+			ret = 1;
+		} else
+			vgl_free(buf);
 		vgl_free((void *)s.prog);
 	}
 	while (s.mat) {
@@ -2465,6 +2492,10 @@ int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length) {
 	(void)type;
 	(void)source;
 	(void)length;
+	if (binary) {
+		*binary = NULL;
+		*binary_len = 0;
+	}
 	return -1;
 #endif
 }
