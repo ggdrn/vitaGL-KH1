@@ -831,6 +831,7 @@ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLbo
 static inline __attribute__((always_inline)) void compile_shader(shader *s, GLboolean save_bindings) {
 #endif
 	// Compiling shader source
+	vgl_shark_lock();
 	s->prog = shark_compile_shader_extended((const char *)s->source, &s->size, s->type == GL_FRAGMENT_SHADER ? SHARK_FRAGMENT_SHADER : SHARK_VERTEX_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
 	if (s->prog) {
 		vgl_free(s->source);
@@ -870,6 +871,7 @@ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLbo
 	shark_log = NULL;
 #endif
 	shark_clear_output();
+	vgl_shark_unlock();
 #ifdef HAVE_SHADER_CACHE
 	if (!s->prog)
 		return;
@@ -2364,6 +2366,138 @@ void glCompileShader(GLuint handle) {
 		glsl_translator_process(s);
 	}
 	vgl_compile_shader(s, GL_FALSE);
+}
+
+/* KH1 port: compile a shader's source into the shader cache file glCompileShader reads for the same source, so a later
+ * glCompileShader of it is a file read instead of a compile.  It touches no GL object or state and may run on any
+ * thread: the compiler is shared under vgl_shark_lock, the heap has its own locks.  The file is written under a
+ * temporary name and renamed, so a glCompileShader on another thread never reads half of it.
+ * type: GL_VERTEX_SHADER / GL_FRAGMENT_SHADER or their GL_CG_*_EXT forms (Cg source only; GLSL is not translated).
+ * With binary set, *binary also gets the shader in the cache file's layout (vglMalloc'd, *binary_len bytes; the caller
+ * vglFree's it), for glShaderBinary on the GL thread: no file read there.
+ * Returns 1 when the cache has the shader (it had it, or the compile wrote it), 0 when the compile or the write failed,
+ * -1 when this build has no shader cache or no compiler. */
+int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length, void **binary, GLsizei *binary_len) {
+#ifdef HAVE_SHADER_CACHE
+	shader s;
+	char fname[256], tname[260];
+	int ret = 0;
+	sceClibMemset(&s, 0, sizeof(s));
+	s.type = (type == GL_FRAGMENT_SHADER || type == GL_CG_FRAGMENT_SHADER_EXT) ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER;
+	s.size = length >= 0 ? (uint32_t)length : strlen(source);
+	if (!is_shark_online)
+		return -1;
+
+	// The same name glCompileShader looks up (its hash covers the source without the terminating zero)
+	uint64_t hash = XXH3_64bits(source, s.size);
+	uint8_t subdir_hash = hash >> 56;
+	int fname_len = sprintf(fname, "%s/%s/%02X/%016llX.gxp", vgl_shader_cache_path, s.type == GL_VERTEX_SHADER ? "v" : "f", subdir_hash, hash);
+	if (binary) {
+		*binary = NULL;
+		*binary_len = 0;
+	}
+	SceIoStat st;
+	if (sceIoGetstat(fname, &st) >= 0) {
+		if (!binary)
+			return 1;
+		SceUID f = sceIoOpen(fname, SCE_O_RDONLY, 0777);
+		if (f >= 0) {
+			size_t sz = sceIoLseek(f, 0, SCE_SEEK_END);
+			sceIoLseek(f, 0, SCE_SEEK_SET);
+			void *buf = vglMalloc(sz);
+			if (buf && sceIoRead(f, buf, sz) == (int)sz) {
+				*binary = buf;
+				*binary_len = sz;
+			} else if (buf) {
+				vgl_free(buf);
+			}
+			sceIoClose(f);
+		}
+		return 1;
+	}
+
+	uint32_t size = s.size;
+	vgl_shark_lock();
+	const SceGxmProgram *t = shark_compile_shader_extended(source, &size, s.type == GL_FRAGMENT_SHADER ? SHARK_FRAGMENT_SHADER : SHARK_VERTEX_SHADER, compiler_opts, compiler_fastmath, compiler_fastprecision, compiler_fastint);
+	if (t) {
+		s.size = size;
+		s.prog = (SceGxmProgram *)vglMalloc(size);
+		if (s.prog) {
+			vgl_fast_memcpy((void *)s.prog, (void *)t, size);
+			// The matrix and uniform block lists compile_shader keeps, read from the same compile output
+			SceShaccCgCompileOutput *cout = (SceShaccCgCompileOutput *)shark_get_internal_compile_output();
+			SceShaccCgParameter param = sceShaccCgGetFirstParameter(cout);
+			while (param) {
+				if (sceShaccCgGetParameterClass(param) == SCE_SHACCCG_PARAMETERCLASS_MATRIX) {
+					matrix_uniform *m = (matrix_uniform *)vglMalloc(sizeof(matrix_uniform));
+					m->ptr = sceGxmProgramFindParameterByName(s.prog, sceShaccCgGetParameterName(param));
+					m->chain = s.mat;
+					s.mat = m;
+				} else if (sceShaccCgGetParameterClass(param) == SCE_SHACCCG_PARAMETERCLASS_UNIFORMBLOCK) {
+					block_uniform *b = (block_uniform *)vglMalloc(sizeof(block_uniform));
+					b->idx = sceShaccCgGetParameterBufferIndex(param);
+					strcpy(b->name, sceShaccCgGetParameterName(param));
+					b->chain = s.unif_blk;
+					s.unif_blk = b;
+				}
+				param = sceShaccCgGetNextParameter(param);
+			}
+		}
+	}
+#ifdef HAVE_SHARK_LOG
+	if (shark_log) {
+		vgl_free(shark_log);
+		shark_log = NULL;
+	}
+#endif
+	shark_clear_output();
+	vgl_shark_unlock();
+
+	if (s.prog) {
+		size_t sz;
+		void *buf = serialize_shader(NULL, &sz, &s, GL_FALSE);
+		fname[fname_len - 21] = 0;
+		sceIoMkdir(fname, 0777);
+		fname[fname_len - 21] = '/';
+		sprintf(tname, "%s.tmp", fname);
+		SceUID f = sceIoOpen(tname, SCE_O_CREAT | SCE_O_WRONLY | SCE_O_TRUNC, 0777);
+		if (f >= 0) {
+			int w = sceIoWrite(f, buf, sz);
+			sceIoClose(f);
+			if (w == (int)sz && sceIoRename(tname, fname) >= 0)
+				ret = 1;
+			else
+				sceIoRemove(tname);
+		}
+		if (binary) {
+			*binary = buf; // (handed over even when the write failed: the shader itself compiled)
+			*binary_len = sz;
+			ret = 1;
+		} else
+			vgl_free(buf);
+		vgl_free((void *)s.prog);
+	}
+	while (s.mat) {
+		matrix_uniform *m = (matrix_uniform *)s.mat->chain;
+		vgl_free(s.mat);
+		s.mat = m;
+	}
+	while (s.unif_blk) {
+		block_uniform *b = (block_uniform *)s.unif_blk->chain;
+		vgl_free(s.unif_blk);
+		s.unif_blk = b;
+	}
+	return ret;
+#else
+	(void)type;
+	(void)source;
+	(void)length;
+	if (binary) {
+		*binary = NULL;
+		*binary_len = 0;
+	}
+	return -1;
+#endif
 }
 
 void glDeleteShader(GLuint shad) {

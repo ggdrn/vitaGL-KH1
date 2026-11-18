@@ -1241,6 +1241,8 @@ GLboolean vglDrawElementsPackedKH1(GLenum mode, GLsizei count, GLenum type, GLui
 GLboolean vglDrawElementsPackedSameKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: the packed draw before's state kept, only this draw's vertex stream and indices (GL_FALSE when any of vitaGL's state moved)
 GLboolean vglDrawElementsPackedTexKH1(GLenum mode, GLsizei count, GLenum type, GLuint index_offset, GLuint vertex_base); // KH1 port: as vglDrawElementsPackedSameKH1, the texture units bound again (GL_FALSE when anything else moved)
 void vglVertexUniformRowsKH1(GLint location, GLsizei rows); // KH1 port: the next draw reads only rows float4 rows of the vertex default uniform buffer from location on (its upload copies only those)
+#define VGL_KH1_SHADER_CACHE_COMPILE 2 // KH1 port: vglCompileShaderCacheKH1 is present (2: with its binary out)
+int vglCompileShaderCacheKH1(GLenum type, const char *source, GLint length, void **binary, GLsizei *binary_len); // KH1 port: the source compiled into the shader cache file glCompileShader reads for it, on any thread (1 cached, 0 failed, -1 no cache or compiler); binary (optional) gets the file's bytes for glShaderBinary (vglFree them)
 GLsizei vglGetTextureStride(GLenum target);
 void *vglGetBufferDataPointer(GLenum target);
 GLuint vglGetSceneFence(void);

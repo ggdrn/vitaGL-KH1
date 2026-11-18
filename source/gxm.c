@@ -324,7 +324,23 @@ int garbage_collector(unsigned int args, void *arg) {
 #endif
 }
 
+/* KH1 port: vitaShaRK keeps its last compile's output and log in globals, so every compile (glCompileShader,
+ * glLinkProgram, the fixed function shaders and vglCompileShaderCacheKH1 on another thread) holds this lock from
+ * shark_compile_shader_extended to shark_clear_output. */
+static SceKernelLwMutexWork shark_mutex;
+static GLboolean shark_mutex_made = GL_FALSE;
+void vgl_shark_lock(void) {
+	if (shark_mutex_made)
+		sceKernelLockLwMutex(&shark_mutex, 1, NULL);
+}
+void vgl_shark_unlock(void) {
+	if (shark_mutex_made)
+		sceKernelUnlockLwMutex(&shark_mutex, 1);
+}
+
 GLboolean start_shader_compiler(void) {
+	if (!shark_mutex_made)
+		shark_mutex_made = sceKernelCreateLwMutex(&shark_mutex, "vitaGL shark", 0, 0, NULL) >= 0;
 	shark_set_allocators(vglMalloc, vglFree);
 	is_shark_online = shark_init(NULL) >= 0;
 
@@ -1086,7 +1102,9 @@ void glReleaseShaderCompiler(void) {
 	THREAD_SAFE()
 
 	if (is_shark_online) {
+		vgl_shark_lock();
 		shark_end();
+		vgl_shark_unlock();
 		is_shark_online = GL_FALSE;
 	}
 }

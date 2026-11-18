@@ -1236,6 +1236,8 @@ void init_display_depth_stencil_surfaces(void); // Creates depth and stencil sur
 void start_shader_patcher(void); // Creates a shader patcher instance
 void scene_reset(void); // Resets drawing scene if required
 GLboolean start_shader_compiler(void); // Starts a shader compiler instance
+void vgl_shark_lock(void); // KH1 port: the runtime shader compiler is used by one thread at a time (vglCompileShaderCacheKH1)
+void vgl_shark_unlock(void);
 
 /* framebuffers.c */
 uint32_t get_alpha_channel_size(SceGxmColorFormat type); // Get alpha channel size in bits
