@@ -1176,6 +1176,7 @@ void *vglForceAlloc(uint32_t size, GLboolean for_gpu);
 
 // Alloc aligned memory from vitaGL internal memory pools. If the memory pools exhausted, vitaGL will attempt to free enough memory to not fail this allocation. Needs to be freed with vglFree.
 void *vglForceAllocAligned(uint32_t alignment, uint32_t size, GLboolean for_gpu);
+void vglSetUnsafeAllocator(GLboolean enable); // KH1: GL_FALSE, a failed allocation returns NULL at once (no GC waits)
 
 // Frees a previously allocated memory block in the vitaGL internal memory pools.
 void vglFree(void *addr);
