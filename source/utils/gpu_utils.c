@@ -155,8 +155,28 @@ static inline __attribute__((always_inline)) uint32_t vgl_cache_old_textures(siz
 #endif
 
 int unsafe_allocator_counter = 0;
+/* KH1: one garbage collection cycle for the unsafe allocators. The GC thread hands back a "Pull" token (gc_mutex[1])
+ * for each job it finishes, so holding all FRAME_PURGE_FREQ of them means every queued job, ours included, is done.
+ * Waiting for that instead of a fixed one-second sleep keeps the GC's purpose (the GPU is idle after the
+ * glFinish / sceGxmFinish, so what it frees is safe to reuse) and turns a failed allocation's up to 4 s stall into
+ * a few milliseconds. The wait is bounded by the old second. Build with UNSAFE_ALLOC_FIXED_DELAY for the old sleep. */
+static void unsafe_gc_cycle(void) {
+#if defined(HAVE_SINGLE_THREADED_GC) && !defined(HAVE_PTHREAD)
+	garbage_collector(0, NULL);
+#else
+	sceKernelWaitSema(gc_mutex[1], 1, NULL);
+	sceKernelSignalSema(gc_mutex[0], 1);
+#ifdef UNSAFE_ALLOC_FIXED_DELAY
+	sceKernelDelayThread(1000000);
+#else
+	SceUInt timeout = 1000000;
+	if (sceKernelWaitSema(gc_mutex[1], FRAME_PURGE_FREQ, &timeout) >= 0)
+		sceKernelSignalSema(gc_mutex[1], FRAME_PURGE_FREQ);
+#endif
+#endif
+}
 /* KH1: 0 makes a failed allocation fail at once (vglSetUnsafeAllocator): no glFinish / sceGxmFinish and none of the
- * FRAME_PURGE_FREQ one-second sleeps waiting for the garbage collector, which stalled the calling thread ~4 s a try */
+ * FRAME_PURGE_FREQ garbage collection cycles (one-second sleeps each before unsafe_gc_cycle, ~4 s a try) */
 static GLboolean unsafe_allocator_on = GL_TRUE;
 void vglSetUnsafeAllocator(GLboolean enable) {
 	unsafe_allocator_on = enable;
@@ -169,13 +189,7 @@ void *gpu_alloc_mapped_aligned_unsafe_for_cpu(size_t alignment, size_t size) {
 	if (unsafe_allocator_counter == 1) {
 		glFinish();
 	}
-#if defined(HAVE_SINGLE_THREADED_GC) && !defined(HAVE_PTHREAD)
-	garbage_collector(0, NULL);
-#else
-	sceKernelWaitSema(gc_mutex[1], 1, NULL);
-	sceKernelSignalSema(gc_mutex[0], 1);
-	sceKernelDelayThread(1000000);
-#endif
+	unsafe_gc_cycle();
 
 	// Allocating requested memblock
 	void *res = gpu_alloc_mapped_aligned_for_cpu_inner(alignment, size);
@@ -197,13 +211,7 @@ void *gpu_alloc_mapped_aligned_unsafe_for_gpu(size_t alignment, size_t size) {
 		// Ideally we'd want glFinish here, but this would cause a circular dependency if the allocation failing is related to a depthstencil surface allocation
 		sceGxmFinish(gxm_context);
 	}
-#if defined(HAVE_SINGLE_THREADED_GC) && !defined(HAVE_PTHREAD)
-	garbage_collector(0, NULL);
-#else
-	sceKernelWaitSema(gc_mutex[1], 1, NULL);
-	sceKernelSignalSema(gc_mutex[0], 1);
-	sceKernelDelayThread(1000000);
-#endif
+	unsafe_gc_cycle();
 
 	// Allocating requested memblock
 	void *res = gpu_alloc_mapped_aligned_for_gpu_inner(alignment, size);
