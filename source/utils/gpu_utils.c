@@ -155,7 +155,15 @@ static inline __attribute__((always_inline)) uint32_t vgl_cache_old_textures(siz
 #endif
 
 int unsafe_allocator_counter = 0;
+/* KH1: 0 makes a failed allocation fail at once (vglSetUnsafeAllocator): no glFinish / sceGxmFinish and none of the
+ * FRAME_PURGE_FREQ one-second sleeps waiting for the garbage collector, which stalled the calling thread ~4 s a try */
+static GLboolean unsafe_allocator_on = GL_TRUE;
+void vglSetUnsafeAllocator(GLboolean enable) {
+	unsafe_allocator_on = enable;
+}
 void *gpu_alloc_mapped_aligned_unsafe_for_cpu(size_t alignment, size_t size) {
+	if (!unsafe_allocator_on)
+		return NULL;
 	// Performing a garbage collection cycle prior to attempting to allocate the memory again
 	unsafe_allocator_counter++;
 	if (unsafe_allocator_counter == 1) {
@@ -181,6 +189,8 @@ void *gpu_alloc_mapped_aligned_unsafe_for_cpu(size_t alignment, size_t size) {
 }
 
 void *gpu_alloc_mapped_aligned_unsafe_for_gpu(size_t alignment, size_t size) {
+	if (!unsafe_allocator_on)
+		return NULL;
 	// Performing a garbage collection cycle prior to attempting to allocate the memory again
 	unsafe_allocator_counter++;
 	if (unsafe_allocator_counter == 1) {
